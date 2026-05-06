@@ -1,93 +1,54 @@
-/**
- * ModalIn MVP – Unit & Integration Tests (Node.js built-in test runner)
- *
- * This test file uses the Node.js 18+ built-in `node:test` module and
- * `node:assert` – no external test-framework dependency required.
- *
- * Run via: npx hardhat run scripts/runTests.js --network hardhat
- * (The canonical test runner for Hardhat 3 is the run-script approach.
- *  This file mirrors the same tests for documentation purposes.)
- *
- * Full suite: 38 test assertions across 7 suites covering
- *   SoulboundToken · GuildSBT · VouchRegistry · ReputationEngine
- *   InterestRateModel · LoanEscrow (lifecycle) · Default & slash scenario
- */
+import hre from "hardhat";
+import { expect } from "chai";
+import { parseEther } from "ethers";
 
-import { describe, it, before } from "node:test";
-import assert from "node:assert/strict";
-import { createHardhatRuntimeEnvironment } from "hardhat/hre";
-import hardhatEthersPlugin from "@nomicfoundation/hardhat-ethers";
+// ─── shared network connection ───────────────────────────────────────────────
 
-// ── Shared state across all suites ─────────────────────────────────────────
-let ethers, owner, borrower, lender1, lender2, groupMember1, groupMember2, oracle;
-let sbt, guild, vouchRegistry, repEngine, rateModel, escrow;
-let connection;
+let ethers, provider;
+before(async function () {
+  const conn = await hre.network.connect();
+  ethers = conn.ethers;
+  provider = conn.provider;
+});
+
+// ─── revert helper (replaces revertedWithCustomError) ────────────────────────
+
+async function expectRevert(promise, errorName) {
+  try {
+    await promise;
+    throw new Error(`Expected revert with '${errorName}' but call succeeded`);
+  } catch (e) {
+    if (!e.message.includes(errorName)) throw e;
+  }
+}
+
+// ─── deploy helper ───────────────────────────────────────────────────────────
 
 async function deployAll() {
-  const hre = await createHardhatRuntimeEnvironment(
-    {
-      plugins: [hardhatEthersPlugin],
-      solidity: {
-        version: "0.8.20",
-        settings: { optimizer: { enabled: true, runs: 200 } },
-      },
-      networks: {
-        hardhat: { type: "edr-simulated", chainId: 31337 },
-      },
-      paths: {
-        sources: "./contracts",
-        tests: "./test",
-        cache: "./cache",
-        artifacts: "./artifacts",
-      },
-    },
-    {}
-  );
+  const [owner, borrower, lender1, lender2, member1, member2, oracle] =
+    await ethers.getSigners();
 
-  connection = await hre.network.connect();
-  ethers = connection.ethers;
+  const sbt = await (await ethers.getContractFactory("SoulboundToken")).deploy();
+  const guild = await (await ethers.getContractFactory("GuildSBT")).deploy();
+  const vouchRegistry = await (await ethers.getContractFactory("VouchRegistry")).deploy();
 
-  const signers = await ethers.getSigners();
-  [owner, borrower, lender1, lender2, groupMember1, groupMember2, oracle] = signers;
+  const repEngine = await (
+    await ethers.getContractFactory("ReputationEngine")
+  ).deploy(await sbt.getAddress(), await guild.getAddress(), await vouchRegistry.getAddress());
 
-  // Deploy
-  const SBTFactory = await ethers.getContractFactory("SoulboundToken");
-  sbt = await SBTFactory.deploy();
-  await sbt.waitForDeployment();
+  const rateModel = await (
+    await ethers.getContractFactory("InterestRateModel")
+  ).deploy(await sbt.getAddress(), await guild.getAddress());
 
-  const GuildFactory = await ethers.getContractFactory("GuildSBT");
-  guild = await GuildFactory.deploy();
-  await guild.waitForDeployment();
-
-  const VouchFactory = await ethers.getContractFactory("VouchRegistry");
-  vouchRegistry = await VouchFactory.deploy();
-  await vouchRegistry.waitForDeployment();
-
-  const RepFactory = await ethers.getContractFactory("ReputationEngine");
-  repEngine = await RepFactory.deploy(
-    await sbt.getAddress(),
-    await guild.getAddress(),
-    await vouchRegistry.getAddress()
-  );
-  await repEngine.waitForDeployment();
-
-  const RateFactory = await ethers.getContractFactory("InterestRateModel");
-  rateModel = await RateFactory.deploy(
-    await sbt.getAddress(),
-    await guild.getAddress()
-  );
-  await rateModel.waitForDeployment();
-
-  const EscrowFactory = await ethers.getContractFactory("LoanEscrow");
-  escrow = await EscrowFactory.deploy(
+  const escrow = await (
+    await ethers.getContractFactory("LoanEscrow")
+  ).deploy(
     await sbt.getAddress(),
     await guild.getAddress(),
     await rateModel.getAddress(),
     await vouchRegistry.getAddress()
   );
-  await escrow.waitForDeployment();
 
-  // Wire permissions
   await sbt.setAuthorizedUpdater(await repEngine.getAddress(), true);
   await sbt.setAuthorizedUpdater(await escrow.getAddress(), true);
   await sbt.setAuthorizedUpdater(owner.address, true);
@@ -95,252 +56,278 @@ async function deployAll() {
   await guild.setAuthorizedUpdater(await escrow.getAddress(), true);
   await vouchRegistry.setLoanEscrow(await escrow.getAddress());
   await repEngine.setDefaultOracle(oracle.address);
+
+  return { sbt, guild, vouchRegistry, repEngine, rateModel, escrow, owner, borrower, lender1, lender2, member1, member2, oracle };
 }
 
-// ── Suite 1: SoulboundToken ────────────────────────────────────────────────
-describe("SoulboundToken", () => {
-  before(deployAll);
+// ─── SoulboundToken ──────────────────────────────────────────────────────────
 
-  it("issues an SBT to a new borrower", async () => {
-    await sbt.issueSBT(borrower.address);
-    assert.equal(await sbt.hasSBT(borrower.address), true);
+describe("SoulboundToken", function () {
+  let ctx;
+  beforeEach(async function () { ctx = await deployAll(); });
+
+  it("issues SBT with neutral score of 500", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    expect(await ctx.sbt.hasSBT(ctx.borrower.address)).to.be.true;
+    expect(await ctx.sbt.getReputationScore(ctx.borrower.address)).to.equal(500n);
   });
 
-  it("starts with a neutral reputation score of 500", async () => {
-    assert.equal(await sbt.getReputationScore(borrower.address), 500n);
+  it("updates reputation score", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await ctx.sbt.updateReputation(ctx.borrower.address, 750n);
+    expect(await ctx.sbt.getReputationScore(ctx.borrower.address)).to.equal(750n);
   });
 
-  it("updates reputation score", async () => {
-    await sbt.updateReputation(borrower.address, 750n);
-    assert.equal(await sbt.getReputationScore(borrower.address), 750n);
+  it("reverts when issuing a second SBT to same address", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await expectRevert(ctx.sbt.issueSBT(ctx.borrower.address), "AlreadyHasSBT");
   });
 
-  it("reverts when issuing a second SBT to same address", async () => {
-    await assert.rejects(sbt.issueSBT(borrower.address), /AlreadyHasSBT/);
+  it("reverts on transfer (soulbound)", async function () {
+    await expectRevert(ctx.sbt.transfer(ctx.borrower.address, 1n), "TransferNotAllowed");
   });
 
-  it("blocks transfers (soulbound)", async () => {
-    await assert.rejects(sbt.transfer(borrower.address, 1n), /TransferNotAllowed/);
-  });
-
-  it("reverts on unauthorized updater", async () => {
-    await assert.rejects(
-      sbt.connect(borrower).updateReputation(borrower.address, 900n),
-      /NotAuthorized/
+  it("reverts when unauthorized actor updates reputation", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await expectRevert(
+      ctx.sbt.connect(ctx.borrower).updateReputation(ctx.borrower.address, 900n),
+      "NotAuthorized"
     );
   });
 
-  it("returns 100% repayment rate with no loan history", async () => {
-    assert.equal(await sbt.getRepaymentRate(borrower.address), 100n);
+  it("returns 100% repayment rate when no loan history", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    expect(await ctx.sbt.getRepaymentRate(ctx.borrower.address)).to.equal(100n);
   });
 });
 
-// ── Suite 2: GuildSBT ──────────────────────────────────────────────────────
-describe("GuildSBT", () => {
-  it("creates a credit group", async () => {
-    await guild.connect(groupMember1).createGroup("Kelompok Maju Jaya");
-    assert.equal(await guild.memberToGroup(groupMember1.address), 1n);
+// ─── GuildSBT ────────────────────────────────────────────────────────────────
+
+describe("GuildSBT", function () {
+  let ctx;
+  beforeEach(async function () { ctx = await deployAll(); });
+
+  it("creates a group with Bronze tier and score 500", async function () {
+    await ctx.guild.connect(ctx.member1).createGroup("Kelompok Maju Jaya");
+    const groupId = await ctx.guild.memberToGroup(ctx.member1.address);
+    const group = await ctx.guild.getGroup(groupId);
+    expect(group.tier).to.equal(0n);
+    expect(group.collectiveScore).to.equal(500n);
   });
 
-  it("allows members to join a group", async () => {
-    await guild.connect(groupMember2).joinGroup(1n);
-    assert.equal(await guild.isGroupMember(groupMember2.address), true);
+  it("allows a second member to join", async function () {
+    await ctx.guild.connect(ctx.member1).createGroup("Kelompok Maju Jaya");
+    const groupId = await ctx.guild.memberToGroup(ctx.member1.address);
+    await ctx.guild.connect(ctx.member2).joinGroup(groupId);
+    expect(await ctx.guild.isGroupMember(ctx.member2.address)).to.be.true;
   });
 
-  it("starts at Bronze tier with score 500", async () => {
-    const g = await guild.getGroup(1n);
-    assert.equal(g.tier, 0n);
-    assert.equal(g.collectiveScore, 500n);
+  it("updates tier to Silver at score 700", async function () {
+    await ctx.guild.connect(ctx.member1).createGroup("Kelompok Maju Jaya");
+    const groupId = await ctx.guild.memberToGroup(ctx.member1.address);
+    await ctx.guild.updateGroupScore(groupId, 700n);
+    expect(await ctx.guild.getGroupTier(groupId)).to.equal(1n);
   });
 
-  it("upgrades to Silver at score ≥ 650", async () => {
-    await guild.updateGroupScore(1n, 700n);
-    assert.equal(await guild.getGroupTier(1n), 1n);
+  it("updates tier to Gold at score 850", async function () {
+    await ctx.guild.connect(ctx.member1).createGroup("Kelompok Maju Jaya");
+    const groupId = await ctx.guild.memberToGroup(ctx.member1.address);
+    await ctx.guild.updateGroupScore(groupId, 850n);
+    expect(await ctx.guild.getGroupTier(groupId)).to.equal(2n);
   });
 
-  it("upgrades to Gold at score ≥ 800", async () => {
-    await guild.updateGroupScore(1n, 850n);
-    assert.equal(await guild.getGroupTier(1n), 2n);
+  it("reverts when member tries to join a second group", async function () {
+    await ctx.guild.connect(ctx.member1).createGroup("Group A");
+    const groupId = await ctx.guild.memberToGroup(ctx.member1.address);
+    await ctx.guild.connect(ctx.member2).joinGroup(groupId);
+    await expectRevert(ctx.guild.connect(ctx.member2).joinGroup(groupId), "AlreadyInGroup");
+  });
+});
+
+// ─── VouchRegistry ───────────────────────────────────────────────────────────
+
+describe("VouchRegistry", function () {
+  let ctx;
+  const stake = parseEther("0.01");
+  beforeEach(async function () { ctx = await deployAll(); });
+
+  it("records a vouch and counts it as active", async function () {
+    await ctx.vouchRegistry.connect(ctx.member1).vouch(ctx.borrower.address, 600n, { value: stake });
+    expect(await ctx.vouchRegistry.getActiveVouchCount(ctx.borrower.address)).to.equal(1n);
   });
 
-  it("reverts when member tries to join a second group", async () => {
-    await assert.rejects(
-      guild.connect(groupMember2).joinGroup(1n),
-      /AlreadyInGroup/
+  it("computes stake-weighted vouch score correctly", async function () {
+    await ctx.vouchRegistry.connect(ctx.member1).vouch(ctx.borrower.address, 600n, { value: stake });
+    await ctx.vouchRegistry.connect(ctx.member2).vouch(ctx.borrower.address, 400n, { value: stake });
+    expect(await ctx.vouchRegistry.getVouchScore(ctx.borrower.address)).to.equal(500n);
+  });
+
+  it("reverts on self-vouching", async function () {
+    await expectRevert(
+      ctx.vouchRegistry.connect(ctx.borrower).vouch(ctx.borrower.address, 500n, { value: stake }),
+      "CannotVouchForSelf"
     );
   });
-});
 
-// ── Suite 3: VouchRegistry ────────────────────────────────────────────────
-describe("VouchRegistry", () => {
-  it("allows vouching with ETH stake", async () => {
-    await vouchRegistry.connect(groupMember1).vouch(borrower.address, 600n, {
-      value: ethers.parseEther("0.01"),
-    });
-    assert.equal(await vouchRegistry.getActiveVouchCount(borrower.address), 1n);
-  });
-
-  it("computes stake-weighted vouch score", async () => {
-    await vouchRegistry.connect(groupMember2).vouch(borrower.address, 400n, {
-      value: ethers.parseEther("0.01"),
-    });
-    assert.equal(await vouchRegistry.getVouchScore(borrower.address), 500n);
-  });
-
-  it("reverts on self-vouch", async () => {
-    await assert.rejects(
-      vouchRegistry.connect(borrower).vouch(borrower.address, 500n, {
-        value: ethers.parseEther("0.01"),
+  it("reverts when stake is below minimum", async function () {
+    await expectRevert(
+      ctx.vouchRegistry.connect(ctx.lender1).vouch(ctx.borrower.address, 500n, {
+        value: parseEther("0.0001"),
       }),
-      /CannotVouchForSelf/
-    );
-  });
-
-  it("reverts on insufficient stake", async () => {
-    await assert.rejects(
-      vouchRegistry.connect(lender1).vouch(borrower.address, 500n, {
-        value: ethers.parseEther("0.0001"),
-      }),
-      /InsufficientStake/
+      "InsufficientStake"
     );
   });
 });
 
-// ── Suite 4: ReputationEngine ─────────────────────────────────────────────
-describe("ReputationEngine", () => {
-  it("recalculates composite score from 3 layers", async () => {
-    const score = await repEngine.recalculateScore.staticCall(borrower.address);
-    await repEngine.recalculateScore(borrower.address);
-    assert.ok(score > 0n, `score ${score} should be > 0`);
+// ─── ReputationEngine ────────────────────────────────────────────────────────
+
+describe("ReputationEngine", function () {
+  let ctx;
+  beforeEach(async function () { ctx = await deployAll(); });
+
+  it("recalculates a composite score greater than zero", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    const score = await ctx.repEngine.recalculateScore.staticCall(ctx.borrower.address);
+    expect(score).to.be.gt(0n);
   });
 
-  it("integrates off-chain attestation score", async () => {
-    await repEngine.connect(oracle).submitAttestationScore(borrower.address, 800n);
-    const { attestScore } = await repEngine.getCompositeScore(borrower.address);
-    assert.equal(attestScore, 800n);
+  it("accepts attestation score from authorized oracle", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await ctx.repEngine.connect(ctx.oracle).submitAttestationScore(ctx.borrower.address, 800n);
+    const { attestScore } = await ctx.repEngine.getCompositeScore(ctx.borrower.address);
+    expect(attestScore).to.equal(800n);
   });
 
-  it("rejects attestation from unauthorized oracle", async () => {
-    await assert.rejects(
-      repEngine.connect(lender1).submitAttestationScore(borrower.address, 800n),
-      /NotAuthorizedOracle/
+  it("reverts when unauthorized address submits attestation", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await expectRevert(
+      ctx.repEngine.connect(ctx.lender1).submitAttestationScore(ctx.borrower.address, 800n),
+      "NotAuthorizedOracle"
     );
   });
 
-  it("reverts when weights do not sum to 100", async () => {
-    await assert.rejects(repEngine.setWeights(50n, 30n, 30n), /WeightsMustSumTo100/);
+  it("reverts when weights do not sum to 100", async function () {
+    await expectRevert(ctx.repEngine.setWeights(50n, 30n, 30n), "WeightsMustSumTo100");
   });
 });
 
-// ── Suite 5: InterestRateModel ────────────────────────────────────────────
-describe("InterestRateModel – APR = Base + GroupRisk - RepDiscount", () => {
-  it("charges higher APR to Bronze/low-reputation borrowers", async () => {
-    // borrower has score 750, no group → Bronze premium applies
-    const apr = await rateModel.calculateAPR(borrower.address);
-    assert.ok(apr > 1500n, `APR ${apr} bps should be > 1500 bps`);
+// ─── InterestRateModel ───────────────────────────────────────────────────────
+
+describe("InterestRateModel", function () {
+  let ctx;
+  beforeEach(async function () { ctx = await deployAll(); });
+
+  it("returns APR above 1500 bps for Bronze/low-rep borrower", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await ctx.sbt.updateReputation(ctx.borrower.address, 750n);
+    expect(await ctx.rateModel.calculateAPR(ctx.borrower.address)).to.be.gt(1500n);
   });
 
-  it("gives lower APR to Gold group members with high reputation", async () => {
-    await guild.connect(borrower).createGroup("Kelompok Emas");
-    const gId = await guild.memberToGroup(borrower.address);
-    await guild.updateGroupScore(gId, 900n);
-    await sbt.updateReputation(borrower.address, 950n);
-
-    const apr = await rateModel.calculateAPR(borrower.address);
-    assert.ok(apr <= 700n, `APR ${apr} bps should be ≤ 700 bps`);
+  it("returns APR at or below 700 bps for Gold/high-rep borrower", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await ctx.sbt.updateReputation(ctx.borrower.address, 950n);
+    await ctx.guild.connect(ctx.borrower).createGroup("Kelompok Emas");
+    const groupId = await ctx.guild.memberToGroup(ctx.borrower.address);
+    await ctx.guild.updateGroupScore(groupId, 900n);
+    expect(await ctx.rateModel.calculateAPR(ctx.borrower.address)).to.be.lte(700n);
   });
 
-  it("calculates non-zero interest amount", async () => {
-    const interest = await rateModel.calculateInterest(
-      borrower.address,
-      ethers.parseEther("1"),
+  it("calculates non-zero interest for a 30-day loan", async function () {
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    const interest = await ctx.rateModel.calculateInterest(
+      ctx.borrower.address,
+      parseEther("1"),
       30n
     );
-    assert.ok(interest > 0n);
+    expect(interest).to.be.gt(0n);
   });
 });
 
-// ── Suite 6: LoanEscrow – Full Lifecycle ─────────────────────────────────
-describe("LoanEscrow – Full Loan Lifecycle", () => {
-  let loanId;
+// ─── LoanEscrow — full lifecycle ─────────────────────────────────────────────
 
-  it("rejects loan request without SBT", async () => {
-    await assert.rejects(
-      escrow.connect(lender2).requestLoan(ethers.parseEther("0.1"), 30n),
-      /NoSBTFound/
+describe("LoanEscrow — full lifecycle", function () {
+  let ctx;
+  const principal = parseEther("0.1");
+  beforeEach(async function () {
+    ctx = await deployAll();
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+  });
+
+  it("reverts loan request from address without SBT", async function () {
+    await expectRevert(
+      ctx.escrow.connect(ctx.lender2).requestLoan(principal, 30n),
+      "NoSBTFound"
     );
   });
 
-  it("accepts loan request from SBT holder", async () => {
-    const tx = await escrow.connect(borrower).requestLoan(ethers.parseEther("0.1"), 30n);
-    await tx.wait();
-    loanId = 1n;
-    const loan = await escrow.getLoan(loanId);
-    assert.equal(loan.status, 0n); // Requested
-    assert.equal(loan.borrower, borrower.address);
+  it("borrower can request a loan and status is Requested (0)", async function () {
+    await ctx.escrow.connect(ctx.borrower).requestLoan(principal, 30n);
+    const loan = await ctx.escrow.getLoan(1n);
+    expect(loan.status).to.equal(0n);
+    expect(loan.borrower).to.equal(ctx.borrower.address);
   });
 
-  it("activates loan after full funding and disburses ETH", async () => {
-    const balBefore = await ethers.provider.getBalance(borrower.address);
-    await escrow.connect(lender1).fundLoan(loanId, { value: ethers.parseEther("0.1") });
-    const loan = await escrow.getLoan(loanId);
-    assert.equal(loan.status, 2n); // Active
-    const balAfter = await ethers.provider.getBalance(borrower.address);
-    assert.ok(balAfter > balBefore);
+  it("lender funds loan and borrower receives ETH — status becomes Active (2)", async function () {
+    await ctx.escrow.connect(ctx.borrower).requestLoan(principal, 30n);
+    const balBefore = await ethers.provider.getBalance(ctx.borrower.address);
+    await ctx.escrow.connect(ctx.lender1).fundLoan(1n, { value: principal });
+    const balAfter = await ethers.provider.getBalance(ctx.borrower.address);
+    expect((await ctx.escrow.getLoan(1n)).status).to.equal(2n);
+    expect(balAfter).to.be.gt(balBefore);
   });
 
-  it("rejects repayment from non-borrower", async () => {
-    const loan = await escrow.getLoan(loanId);
-    await assert.rejects(
-      escrow.connect(lender1).repayLoan(loanId, { value: loan.totalDue }),
-      /NotBorrower/
+  it("reverts when non-borrower tries to repay", async function () {
+    await ctx.escrow.connect(ctx.borrower).requestLoan(principal, 30n);
+    await ctx.escrow.connect(ctx.lender1).fundLoan(1n, { value: principal });
+    const loan = await ctx.escrow.getLoan(1n);
+    await expectRevert(
+      ctx.escrow.connect(ctx.lender1).repayLoan(1n, { value: loan.totalDue }),
+      "NotBorrower"
     );
   });
 
-  it("accepts full repayment from borrower", async () => {
-    const loan = await escrow.getLoan(loanId);
-    await escrow.connect(borrower).repayLoan(loanId, { value: loan.totalDue });
-    const repaid = await escrow.getLoan(loanId);
-    assert.equal(repaid.status, 3n); // Repaid
+  it("borrower repays and status becomes Repaid (3)", async function () {
+    await ctx.escrow.connect(ctx.borrower).requestLoan(principal, 30n);
+    await ctx.escrow.connect(ctx.lender1).fundLoan(1n, { value: principal });
+    const loan = await ctx.escrow.getLoan(1n);
+    await ctx.escrow.connect(ctx.borrower).repayLoan(1n, { value: loan.totalDue });
+    expect((await ctx.escrow.getLoan(1n)).status).to.equal(3n);
   });
 
-  it("lender withdraws principal plus interest after repayment", async () => {
-    const balBefore = await ethers.provider.getBalance(lender1.address);
-    await escrow.connect(lender1).withdrawLenderFunds(loanId, 0n);
-    const balAfter = await ethers.provider.getBalance(lender1.address);
-    assert.ok(balAfter > balBefore);
+  it("lender withdraws principal + interest after repayment", async function () {
+    await ctx.escrow.connect(ctx.borrower).requestLoan(principal, 30n);
+    await ctx.escrow.connect(ctx.lender1).fundLoan(1n, { value: principal });
+    const loan = await ctx.escrow.getLoan(1n);
+    await ctx.escrow.connect(ctx.borrower).repayLoan(1n, { value: loan.totalDue });
+    const balBefore = await ethers.provider.getBalance(ctx.lender1.address);
+    await ctx.escrow.connect(ctx.lender1).withdrawLenderFunds(1n, 0n);
+    const balAfter = await ethers.provider.getBalance(ctx.lender1.address);
+    expect(balAfter).to.be.gt(balBefore);
   });
 });
 
-// ── Suite 7: Default & Voucher Slash ─────────────────────────────────────
-describe("Default Scenario – Voucher Slash & Reputation Penalty", () => {
-  it("slashes vouchers and halves reputation on default", async () => {
-    // Issue SBT to lender2 as the defaulting borrower
-    await sbt.issueSBT(lender2.address);
+// ─── LoanEscrow — default & slash ────────────────────────────────────────────
 
-    const tx = await escrow.connect(lender2).requestLoan(ethers.parseEther("0.05"), 7n);
-    await tx.wait();
-    const defaultLoanId = 2n;
-    await escrow.connect(lender1).fundLoan(defaultLoanId, { value: ethers.parseEther("0.05") });
+describe("LoanEscrow — default & slash", function () {
+  it("marks loan Defaulted (4), slashes vouchers, and halves borrower reputation", async function () {
+    const ctx = await deployAll();
+    await ctx.sbt.issueSBT(ctx.borrower.address);
+    await ctx.escrow.connect(ctx.borrower).requestLoan(parseEther("0.05"), 7n);
+    await ctx.escrow.connect(ctx.lender1).fundLoan(1n, { value: parseEther("0.05") });
+    await ctx.vouchRegistry
+      .connect(ctx.member1)
+      .vouch(ctx.borrower.address, 600n, { value: parseEther("0.02") });
 
-    await vouchRegistry.connect(groupMember1).vouch(lender2.address, 600n, {
-      value: ethers.parseEther("0.02"),
-    });
-    assert.equal(await vouchRegistry.getActiveVouchCount(lender2.address), 1n);
+    const scoreBefore = await ctx.sbt.getReputationScore(ctx.borrower.address);
 
-    // Fast-forward past due date + 7-day grace period
-    await connection.provider.send("evm_increaseTime", [15 * 24 * 60 * 60]);
-    await connection.provider.send("evm_mine", []);
+    // fast-forward past due date + grace period using the shared provider
+    await provider.send("evm_increaseTime", [15 * 24 * 60 * 60]);
+    await provider.send("evm_mine", []);
 
-    const scoreBefore = await sbt.getReputationScore(lender2.address);
-    await escrow.markDefault(defaultLoanId);
+    await ctx.escrow.markDefault(1n);
 
-    const loan = await escrow.getLoan(defaultLoanId);
-    assert.equal(loan.status, 4n); // Defaulted
-
-    assert.equal(await vouchRegistry.getActiveVouchCount(lender2.address), 0n);
-
-    const scoreAfter = await sbt.getReputationScore(lender2.address);
-    assert.ok(scoreAfter <= scoreBefore / 2n + 1n, `Score ${scoreBefore} → ${scoreAfter}`);
+    expect((await ctx.escrow.getLoan(1n)).status).to.equal(4n);
+    expect(await ctx.vouchRegistry.getActiveVouchCount(ctx.borrower.address)).to.equal(0n);
+    expect(await ctx.sbt.getReputationScore(ctx.borrower.address)).to.be.lte(scoreBefore / 2n + 1n);
   });
 });
