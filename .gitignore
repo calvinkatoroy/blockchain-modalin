@@ -1,0 +1,13 @@
+node_modules/
+artifacts/
+cache/
+coverage/
+coverage.json
+typechain-types/
+
+.env
+.env.local
+
+.DS_Store
+
+CLAUDE.md
