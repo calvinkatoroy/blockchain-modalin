@@ -20,7 +20,10 @@ import { cn } from '@/lib/utils';
 import {
   APRBreakdown,
   CompositeScore,
+  CreditGroup,
   CreditProfile,
+  GUILD_TIER_MAP,
+  GuildTier,
   LOAN_STATUS_MAP,
   Loan,
   TxState,
@@ -28,22 +31,30 @@ import {
 } from './types';
 import {
   connectWallet as connectWalletService,
+  createGroup as createGroupService,
+  fastForwardTime,
+  getBlockTimestamp,
   fundLoan as fundLoanService,
   getAPRBreakdown,
+  getActiveVouchCount,
   getBorrowerLoans,
   getCompositeScore,
   getCreditProfile,
+  getGroupByMember,
   getLoan,
   getLoanContributions,
   getWalletBalance,
   hasSBT,
+  isGroupMember as checkIsGroupMember,
+  joinGroup as joinGroupService,
+  markDefault as markDefaultService,
   recalculateScore,
   repayLoan as repayLoanService,
   requestLoan as requestLoanService,
   selfRegister,
+  vouch as vouchService,
   withdrawLenderFunds,
 } from './services/contractService';
-import { easService } from './services/easService';
 
 type TabKey = 'borrow' | 'lend' | 'reputation';
 
@@ -88,6 +99,27 @@ function formatProfile(raw: any): CreditProfile {
     lastUpdated: Number(raw.lastUpdated),
     isActive: raw.isActive,
   };
+}
+
+function formatGroup(raw: any): CreditGroup {
+  return {
+    groupId: raw.groupId.toString(),
+    name: raw.name,
+    members: raw.members,
+    collectiveScore: Number(raw.collectiveScore),
+    tier: GUILD_TIER_MAP[Number(raw.tier)] ?? 'Bronze',
+    totalGroupLoans: Number(raw.totalGroupLoans),
+    totalGroupRepayments: Number(raw.totalGroupRepayments),
+    createdAt: Number(raw.createdAt),
+    lastUpdated: Number(raw.lastUpdated),
+    isActive: raw.isActive,
+  };
+}
+
+function getTierBadgeClass(tier: GuildTier) {
+  if (tier === 'Gold') return 'border-yellow-300 bg-yellow-50 text-yellow-800';
+  if (tier === 'Silver') return 'border-slate-300 bg-slate-100 text-slate-700';
+  return 'border-amber-300 bg-amber-50 text-amber-800';
 }
 
 function shortAddress(address: string) {
@@ -198,12 +230,19 @@ export default function App() {
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [aprBreakdown, setAprBreakdown] = useState<APRBreakdown | null>(null);
   const [compositeScore, setCompositeScore] = useState<CompositeScore | null>(null);
-  const [attestations, setAttestations] = useState<any[]>([]);
+  const [groupInfo, setGroupInfo] = useState<CreditGroup | null>(null);
+  const [isInGroup, setIsInGroup] = useState(false);
+  const [activeVouchCount, setActiveVouchCount] = useState(0);
+  const [groupName, setGroupName] = useState('');
+  const [joinGroupId, setJoinGroupId] = useState('');
+  const [vouchAddress, setVouchAddress] = useState('');
+  const [vouchAmount, setVouchAmount] = useState('');
   const [loanPrincipal, setLoanPrincipal] = useState('');
   const [loanDuration, setLoanDuration] = useState('');
   const [fundAmounts, setFundAmounts] = useState<Record<string, string>>({});
   const [txState, setTxState] = useState<TxState>({ status: 'idle' });
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const [isForwarding, setIsForwarding] = useState(false);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isLoadingLoans, setIsLoadingLoans] = useState(false);
 
@@ -276,10 +315,24 @@ export default function App() {
         }
 
         try {
-          const data = await easService.getAttestations(address);
-          setAttestations(data);
+          const inGroup = await checkIsGroupMember(address);
+          setIsInGroup(inGroup);
+          if (inGroup) {
+            const rawGroup = await getGroupByMember(address);
+            setGroupInfo(formatGroup(rawGroup));
+          } else {
+            setGroupInfo(null);
+          }
         } catch {
-          setAttestations([]);
+          setIsInGroup(false);
+          setGroupInfo(null);
+        }
+
+        try {
+          const count = await getActiveVouchCount(address);
+          setActiveVouchCount(Number(count));
+        } catch {
+          setActiveVouchCount(0);
         }
       } finally {
         setIsLoadingProfile(false);
@@ -298,9 +351,15 @@ export default function App() {
     if (!silent) {
       setTxState({ status: 'pending' });
     }
-    const receipt = await selfRegister();
-    if (!silent) {
-      setTxState({ status: 'success', hash: receipt.hash });
+    try {
+      const receipt = await selfRegister();
+      if (!silent) {
+        setTxState({ status: 'success', hash: receipt.hash });
+      }
+    } catch (err: any) {
+      // Ignore if another concurrent call already registered this address
+      const msg = err?.reason ?? err?.message ?? '';
+      if (!msg.includes('AlreadyHasSBT')) throw err;
     }
     return true;
   }, []);
@@ -328,7 +387,9 @@ export default function App() {
         setMyLoans([]);
         setAprBreakdown(null);
         setCompositeScore(null);
-        setAttestations([]);
+        setGroupInfo(null);
+        setIsInGroup(false);
+        setActiveVouchCount(0);
         return;
       }
 
@@ -359,6 +420,81 @@ export default function App() {
       setTxState({ status: 'error', error: error.reason ?? error.message });
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  const handleFastForward = async (days: number) => {
+    setIsForwarding(true);
+    try {
+      await fastForwardTime(days * 24 * 60 * 60 + 15);
+      await loadAllLoans();
+      if (wallet.address) await loadUserData(wallet.address);
+    } catch (error: any) {
+      setTxState({ status: 'error', error: error.message });
+    } finally {
+      setIsForwarding(false);
+    }
+  };
+
+  const handleMarkDefault = async (loan: Loan) => {
+    setTxState({ status: 'pending' });
+    try {
+      const GRACE_PERIOD = 10; // seconds, must match LoanEscrow.sol
+      const now = await getBlockTimestamp();
+      const requiredTime = loan.dueDate + GRACE_PERIOD + 1;
+      if (now <= requiredTime) {
+        setIsForwarding(true);
+        await fastForwardTime(requiredTime - now + 5);
+        setIsForwarding(false);
+      }
+      const receipt = await markDefaultService(BigInt(loan.loanId));
+      setTxState({ status: 'success', hash: receipt.hash });
+      await loadAllLoans();
+      if (wallet.address) await loadUserData(wallet.address);
+    } catch (error: any) {
+      setIsForwarding(false);
+      setTxState({ status: 'error', error: error.reason ?? error.message });
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!groupName) return;
+    setTxState({ status: 'pending' });
+    try {
+      const receipt = await createGroupService(groupName);
+      setTxState({ status: 'success', hash: receipt.hash });
+      setGroupName('');
+      await loadUserData(wallet.address);
+    } catch (error: any) {
+      setTxState({ status: 'error', error: error.reason ?? error.message });
+    }
+  };
+
+  const handleJoinGroup = async () => {
+    if (!joinGroupId) return;
+    setTxState({ status: 'pending' });
+    try {
+      const receipt = await joinGroupService(Number(joinGroupId));
+      setTxState({ status: 'success', hash: receipt.hash });
+      setJoinGroupId('');
+      await loadUserData(wallet.address);
+    } catch (error: any) {
+      setTxState({ status: 'error', error: error.reason ?? error.message });
+    }
+  };
+
+  const handleVouch = async () => {
+    if (!vouchAddress || !vouchAmount) return;
+    setTxState({ status: 'pending' });
+    try {
+      const voucherScore = profile?.reputationScore ?? 500;
+      const receipt = await vouchService(vouchAddress, voucherScore, vouchAmount);
+      setTxState({ status: 'success', hash: receipt.hash });
+      setVouchAddress('');
+      setVouchAmount('');
+      await loadUserData(wallet.address);
+    } catch (error: any) {
+      setTxState({ status: 'error', error: error.reason ?? error.message });
     }
   };
 
@@ -905,12 +1041,83 @@ export default function App() {
                   )}
                 </SectionCard>
 
-                <SectionCard title="Panduan Singkat" description="Urutan dasar untuk mencoba fitur pendanaan di mode demo.">
-                  <div className="space-y-3 text-sm text-muted-foreground">
-                    <p>1. Pindah ke akun pendana di MetaMask.</p>
-                    <p>2. Pilih pinjaman yang statusnya masih menunggu dana.</p>
-                    <p>3. Isi jumlah pendanaan lalu klik tombol danai.</p>
-                    <p>4. Setelah peminjam melunasi, tarik kembali dana beserta bunganya.</p>
+                <SectionCard title="Pinjaman Aktif" description="Pinjaman yang sedang berjalan. Gunakan Dev Tools di bawah untuk menguji skenario gagal bayar.">
+                  {allLoans.filter((l) => l.status === 'Active').length === 0 ? (
+                    <EmptyState
+                      icon={<ArrowDownLeft className="h-5 w-5" />}
+                      title="Belum ada pinjaman aktif"
+                      description="Pinjaman berstatus Berjalan akan muncul di sini setelah didanai penuh."
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {allLoans.filter((l) => l.status === 'Active').map((loan) => (
+                        <div key={loan.loanId} className="rounded-xl border border-border p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium">Pinjaman #{loan.loanId}</p>
+                                <Badge
+                                  variant="outline"
+                                  className={cn('rounded-full px-2.5 py-0.5 text-[11px]', getStatusBadgeClass(loan.status))}
+                                >
+                                  {getStatusLabel(loan.status)}
+                                </Badge>
+                              </div>
+                              <p className="mt-2 text-xl font-semibold text-primary">{eth(loan.principal)}</p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Peminjam: {getAccountLabel(loan.borrower)} · Jatuh tempo: {formatDate(loan.dueDate)}
+                              </p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              onClick={() => handleMarkDefault(loan)}
+                              disabled={txState.status === 'pending' || isForwarding}
+                              className="rounded-full border-red-200 text-red-700 hover:bg-red-50"
+                            >
+                              {txState.status === 'pending' || isForwarding ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : null}
+                              Simulasi Gagal Bayar
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+
+                <SectionCard title="Dev Tools" description="Simulasi percepatan waktu untuk menguji skenario gagal bayar tanpa menunggu.">
+                  <div className="space-y-4">
+                    <div>
+                      <p className="mb-3 text-sm text-muted-foreground">Majukan waktu blockchain lokal:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { label: '+1 hari', days: 1 },
+                          { label: '+7 hari', days: 7 },
+                          { label: '+30 hari', days: 30 },
+                        ].map(({ label, days }) => (
+                          <Button
+                            key={days}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleFastForward(days)}
+                            disabled={isForwarding}
+                            className="rounded-full"
+                          >
+                            {isForwarding ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                            {label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 space-y-1">
+                      <p className="font-medium">Cara uji skenario gagal bayar:</p>
+                      <p>1. Peminjam ajukan pinjaman (min 0.0001 ETH, min 1 hari)</p>
+                      <p>2. Pendana danai penuh → otomatis aktif</p>
+                      <p>3. Klik majukan waktu melebihi durasi pinjaman</p>
+                      <p>4. Klik "Tandai Gagal Bayar" di pinjaman aktif di atas</p>
+                      <p>5. Vouch terpangkas + reputasi peminjam terpotong 50%</p>
+                    </div>
                   </div>
                 </SectionCard>
               </div>
@@ -947,9 +1154,8 @@ export default function App() {
                       </div>
 
                       {[
-                        { label: 'Skor pembayaran', value: compositeScore.paymentScore },
-                        { label: 'Skor vouch', value: compositeScore.vouchScore },
-                        { label: 'Skor attestasi', value: compositeScore.attestScore },
+                        { label: 'Skor pembayaran (70%)', value: compositeScore.paymentScore },
+                        { label: 'Skor vouch (30%)', value: compositeScore.vouchScore },
                       ].map((item) => (
                         <div key={item.label} className="space-y-2">
                           <div className="flex items-center justify-between text-sm">
@@ -977,41 +1183,151 @@ export default function App() {
                     <p className="text-sm text-muted-foreground">Hubungkan dompet untuk melihat identitas akun.</p>
                   )}
                 </SectionCard>
+
+                <SectionCard
+                  title="Kelompok Kredit"
+                  description="Tier grup mempengaruhi premium APR pinjaman."
+                >
+                  {!wallet.isConnected ? (
+                    <EmptyState
+                      icon={<Shield className="h-5 w-5" />}
+                      title="Belum terhubung"
+                      description="Hubungkan dompet untuk melihat atau membuat kelompok kredit."
+                    />
+                  ) : isInGroup && groupInfo ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <Badge
+                          variant="outline"
+                          className={cn('rounded-full px-3 py-1 text-sm font-semibold', getTierBadgeClass(groupInfo.tier))}
+                        >
+                          {groupInfo.tier}
+                        </Badge>
+                        <div>
+                          <p className="font-medium text-foreground">{groupInfo.name}</p>
+                          <p className="text-xs text-muted-foreground">Grup #{groupInfo.groupId}</p>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                        <div className="rounded-xl border border-border p-3">
+                          <p className="text-muted-foreground">Skor kolektif</p>
+                          <p className="mt-1 text-xl font-semibold">{groupInfo.collectiveScore}</p>
+                        </div>
+                        <div className="rounded-xl border border-border p-3">
+                          <p className="text-muted-foreground">Anggota</p>
+                          <p className="mt-1 text-xl font-semibold">{groupInfo.members.length}</p>
+                        </div>
+                        <div className="rounded-xl border border-border p-3">
+                          <p className="text-muted-foreground">Pinjaman grup</p>
+                          <p className="mt-1 text-xl font-semibold">{groupInfo.totalGroupLoans}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Silver: skor ≥ 650 · Gold: skor ≥ 800
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <p className="text-sm text-muted-foreground">Kamu belum bergabung ke kelompok mana pun.</p>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-foreground">Buat kelompok baru</label>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Nama kelompok"
+                            value={groupName}
+                            onChange={(e) => setGroupName(e.target.value)}
+                            className="h-10 rounded-xl flex-1"
+                          />
+                          <Button
+                            onClick={handleCreateGroup}
+                            disabled={!groupName || txState.status === 'pending'}
+                            className="rounded-xl"
+                          >
+                            Buat
+                          </Button>
+                        </div>
+                      </div>
+                      <Separator />
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-foreground">Gabung kelompok</label>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="ID kelompok"
+                            value={joinGroupId}
+                            onChange={(e) => setJoinGroupId(e.target.value)}
+                            className="h-10 rounded-xl flex-1"
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={handleJoinGroup}
+                            disabled={!joinGroupId || txState.status === 'pending'}
+                            className="rounded-xl"
+                          >
+                            Gabung
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </SectionCard>
               </div>
 
               <div className="space-y-6">
                 <SectionCard
-                  title="Attestasi Terverifikasi"
-                  description="Contoh data dukungan reputasi dari layanan eksternal."
+                  title="Vouch Aktif"
+                  description="Jaminan peer-to-peer yang menguatkan profil kredit."
                 >
-                  {attestations.length === 0 ? (
+                  {!wallet.isConnected ? (
                     <EmptyState
                       icon={<CheckCircle2 className="h-5 w-5" />}
-                      title="Belum ada attestasi"
-                      description="Data attestasi akan muncul di sini setelah tersedia."
+                      title="Belum terhubung"
+                      description="Hubungkan dompet untuk melihat dan memberikan vouch."
                     />
                   ) : (
-                    <div className="space-y-3">
-                      {attestations.map((attestation, index) => (
-                        <div key={index} className="rounded-xl border border-border p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-medium text-foreground">
-                                {attestation.data?.businessName ?? 'Attestasi'}
-                              </p>
-                              <p className="mt-1 text-sm text-muted-foreground">
-                                Diterbitkan oleh {attestation.attester}
-                              </p>
-                              <p className="mt-1 text-sm text-muted-foreground">
-                                Tanggal {new Date(attestation.time).toLocaleDateString('id-ID')}
-                              </p>
-                            </div>
-                            <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-50 text-emerald-700">
-                              Terverifikasi
-                            </Badge>
+                    <div className="space-y-4">
+                      <div className="rounded-xl bg-muted/45 p-4 flex items-center justify-between">
+                        <div>
+                          <p className="text-sm text-muted-foreground">Vouch masuk aktif</p>
+                          <p className="mt-1 text-2xl font-semibold">{activeVouchCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-muted-foreground">Skor vouch</p>
+                          <p className="mt-1 text-2xl font-semibold">{compositeScore?.vouchScore ?? 0}</p>
+                        </div>
+                      </div>
+                      <Separator />
+                      <div className="space-y-3">
+                        <p className="text-sm font-medium text-foreground">Berikan vouch ke alamat lain</p>
+                        <div className="space-y-2">
+                          <Input
+                            placeholder="Alamat tujuan (0x...)"
+                            value={vouchAddress}
+                            onChange={(e) => setVouchAddress(e.target.value)}
+                            className="h-10 rounded-xl"
+                          />
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder="Jumlah ETH (min 0.001)"
+                              value={vouchAmount}
+                              onChange={(e) => setVouchAmount(e.target.value)}
+                              className="h-10 rounded-xl flex-1"
+                            />
+                            <Button
+                              onClick={handleVouch}
+                              disabled={!vouchAddress || !vouchAmount || txState.status === 'pending'}
+                              className="rounded-xl"
+                            >
+                              {txState.status === 'pending' ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : null}
+                              Vouch
+                            </Button>
                           </div>
                         </div>
-                      ))}
+                        <p className="text-xs text-muted-foreground">
+                          ETH yang di-stake akan hilang jika peminjam gagal bayar.
+                        </p>
+                      </div>
                     </div>
                   )}
                 </SectionCard>
@@ -1021,9 +1337,9 @@ export default function App() {
                   description="Penjelasan singkat tentang peran reputasi dalam aplikasi ini."
                 >
                   <div className="space-y-3 text-sm text-muted-foreground">
-                    <p>Reputasi digunakan untuk membantu menentukan APR dan kelayakan pinjaman.</p>
-                    <p>Semakin baik histori pembayaran dan dukungan attestasi, semakin sehat profil kreditnya.</p>
-                    <p>Tampilan ini disederhanakan agar fokus pada informasi yang paling penting.</p>
+                    <p>Reputasi terdiri dari dua komponen: histori pembayaran (70%) dan skor vouch (30%).</p>
+                    <p>Bergabung ke kelompok kredit mempengaruhi premium APR: Bronze +8%, Silver +4%, Gold ±0%.</p>
+                    <p>Vouch adalah jaminan sosial — anggota kelompok bisa stake ETH untuk mendukung peminjam lain.</p>
                   </div>
                 </SectionCard>
               </div>

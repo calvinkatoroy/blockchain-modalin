@@ -436,11 +436,25 @@ export async function withdrawLenderFunds(
   return tx.wait();
 }
 
-/** Tandai pinjaman sebagai default (hanya owner) */
+/** Tandai pinjaman sebagai default (siapapun bisa panggil setelah grace period) */
 export async function markDefault(loanId: bigint): Promise<ethers.ContractTransactionReceipt> {
   const contract = await getLoanEscrow();
   const tx = await contract.markDefault(loanId);
   return tx.wait();
+}
+
+/** Fast-forward waktu Hardhat node (hanya untuk testing lokal) */
+export async function fastForwardTime(seconds: number): Promise<void> {
+  const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  await provider.send("evm_increaseTime", [seconds]);
+  await provider.send("evm_mine", []);
+}
+
+/** Ambil timestamp block terbaru dari Hardhat node */
+export async function getBlockTimestamp(): Promise<number> {
+  const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  const block = await provider.getBlock("latest");
+  return block!.timestamp;
 }
 
 // ─────────────────────────────────────────────────────────────

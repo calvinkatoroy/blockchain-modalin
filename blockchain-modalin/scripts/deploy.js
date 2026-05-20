@@ -109,6 +109,10 @@ async function main() {
   // Deployer juga diberi akses sebagai issuer awal
   await sbt.setAuthorizedUpdater(deployer.address, true);
 
+  // Redistribusi weight: hapus attestasi (butuh oracle), fokus payment + vouch
+  // Payment 70% + Vouch 30% = 100% → score bisa naik dari repayment saja
+  await repEngine.setWeights(70, 30, 0);
+
   console.log("Permissions setup completed");
 
   // =========================

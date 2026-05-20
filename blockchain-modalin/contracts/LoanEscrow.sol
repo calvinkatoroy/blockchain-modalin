@@ -53,9 +53,9 @@ contract LoanEscrow is Ownable, ReentrancyGuard {
     InterestRateModel public interestRateModel;
     VouchRegistry public vouchRegistry;
 
-    uint256 public constant MIN_LOAN = 0.01 ether;
+    uint256 public constant MIN_LOAN = 0.0001 ether;
     uint256 public constant MAX_LOAN = 10 ether;
-    uint256 public constant GRACE_PERIOD = 7 days;
+    uint256 public constant GRACE_PERIOD = 10 seconds;
     uint256 public platformFeeBps = 100; // 1% platform fee
 
     event LoanRequested(uint256 indexed loanId, address indexed borrower, uint256 principal);
@@ -91,7 +91,7 @@ contract LoanEscrow is Ownable, ReentrancyGuard {
     function requestLoan(uint256 principal, uint256 durationDays) external returns (uint256) {
         if (!soulboundToken.hasSBT(msg.sender)) revert NoSBTFound(msg.sender);
         if (principal < MIN_LOAN || principal > MAX_LOAN) revert LoanAmountOutOfRange(principal);
-        require(durationDays >= 7 && durationDays <= 365, "Duration must be 7-365 days");
+        require(durationDays >= 1 && durationDays <= 365, "Duration must be 1-365 days");
 
         uint256 apr = interestRateModel.calculateAPR(msg.sender);
         uint256 interest = interestRateModel.calculateInterest(msg.sender, principal, durationDays);
