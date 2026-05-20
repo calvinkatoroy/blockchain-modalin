@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 
-# Hardhat compilation artifacts
+# Hardhat
 artifacts/
 cache/
 typechain-types/
@@ -9,13 +9,6 @@ typechain-types/
 # Environment variables
 .env
 .env.local
-
-# Reports & documents (submitted separately)
-*.md
-*.pdf
-*.PDF
-context/
-Midterm Report/
 
 # OS
 .DS_Store

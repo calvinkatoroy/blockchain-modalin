@@ -6,17 +6,22 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import "dotenv/config";
 
 // Setup path untuk ES Module (menggantikan __dirname di CommonJS)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 async function main() {
-  // Koneksi ke local blockchain (Hardhat node)
-  const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  const rpcUrl = process.env.SEPOLIA_RPC_URL || "http://127.0.0.1:8545";
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
 
-  // Ambil akun pertama sebagai deployer
-  const deployer = await provider.getSigner(0);
+  let deployer;
+  if (process.env.PRIVATE_KEY) {
+    deployer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+  } else {
+    deployer = await provider.getSigner(0);
+  }
 
   console.log("Deploying contracts with account:", deployer.address);
   console.log(
@@ -25,24 +30,11 @@ async function main() {
     "ETH"
   );
 
-  // Helper function untuk deploy contract berdasarkan nama
-  // Mengambil ABI + bytecode dari Hardhat artifacts
   async function deployContract(name, ...args) {
     const artifact = await hre.artifacts.readArtifact(name);
-
-    // Membuat factory contract secara manual menggunakan ethers
-    const factory = new ethers.ContractFactory(
-      artifact.abi,
-      artifact.bytecode,
-      deployer
-    );
-
-    // Deploy contract ke blockchain
+    const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode, deployer);
     const contract = await factory.deploy(...args);
-
-    // Menunggu sampai deployment selesai
     await contract.waitForDeployment();
-
     return contract;
   }
 

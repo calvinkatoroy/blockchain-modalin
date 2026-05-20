@@ -1,15 +1,23 @@
+# Dependencies
 node_modules/
+
+# Hardhat
 artifacts/
 cache/
 coverage/
 coverage.json
 typechain-types/
 
+# Environment variables
 .env
 .env.local
 
+# OS
 .DS_Store
+Thumbs.db
 
-CLAUDE.md
-
+# Docs
 docs/
+
+# Claude
+CLAUDE.md
