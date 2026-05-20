@@ -208,10 +208,6 @@ contract LoanEscrow is Ownable, ReentrancyGuard {
         // Slash all vouchers
         vouchRegistry.slashVouchers(loan.borrower);
 
-        // Penalize reputation: halve the score
-        uint256 currentScore = soulboundToken.getReputationScore(loan.borrower);
-        soulboundToken.updateReputation(loan.borrower, currentScore / 2);
-
         // Penalize group
         uint256 groupId = guildSBT.memberToGroup(loan.borrower);
         if (groupId != 0) {
