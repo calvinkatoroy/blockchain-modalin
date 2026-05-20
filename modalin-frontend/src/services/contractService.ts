@@ -84,8 +84,11 @@ export const GUILD_TIER: Record<number, string> = {
   2: "Gold",
 };
 
-const HARDHAT_CHAIN_ID     = 31337;
-const HARDHAT_CHAIN_ID_HEX = "0x7A69";
+const USE_LOCAL = import.meta.env.VITE_NETWORK === "local";
+
+const NETWORK = USE_LOCAL
+  ? { chainId: 31337,    chainIdHex: "0x7A69",   name: "Hardhat Local",    rpcUrl: "http://127.0.0.1:8545" }
+  : { chainId: 11155111, chainIdHex: "0xAA36A7", name: "Ethereum Sepolia", rpcUrl: "https://rpc.sepolia.org" };
 
 // ─────────────────────────────────────────────────────────────
 // WALLET
@@ -104,20 +107,20 @@ export async function connectWallet(): Promise<{
   const provider = getProvider();
 
   const network = await provider.getNetwork();
-  if (Number(network.chainId) !== HARDHAT_CHAIN_ID) {
+  if (Number(network.chainId) !== NETWORK.chainId) {
     try {
       await window.ethereum.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: HARDHAT_CHAIN_ID_HEX }],
+        params: [{ chainId: NETWORK.chainIdHex }],
       });
     } catch (err: any) {
       if (err.code === 4902) {
         await window.ethereum.request({
           method: "wallet_addEthereumChain",
           params: [{
-            chainId: HARDHAT_CHAIN_ID_HEX,
-            chainName: "Hardhat Local",
-            rpcUrls: ["http://127.0.0.1:8545"],
+            chainId: NETWORK.chainIdHex,
+            chainName: NETWORK.name,
+            rpcUrls: [NETWORK.rpcUrl],
             nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
           }],
         });

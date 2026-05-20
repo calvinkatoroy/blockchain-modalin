@@ -1351,7 +1351,7 @@ export default function App() {
       <footer className="border-t border-border bg-white">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-5 text-sm text-muted-foreground sm:px-6 sm:flex-row sm:items-center sm:justify-between">
           <p>ModalIn untuk simulasi pinjaman mikro berbasis blockchain.</p>
-          <p>Jaringan lokal Hardhat • Chain ID 31337</p>
+          <p>{import.meta.env.VITE_NETWORK === "local" ? "Hardhat Local • Chain ID 31337" : "Ethereum Sepolia Testnet • Chain ID 11155111"}</p>
         </div>
       </footer>
     </div>
