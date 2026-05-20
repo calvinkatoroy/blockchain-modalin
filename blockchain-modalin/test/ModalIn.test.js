@@ -309,7 +309,7 @@ describe("LoanEscrow — full lifecycle", function () {
 // ─── LoanEscrow — default & slash ────────────────────────────────────────────
 
 describe("LoanEscrow — default & slash", function () {
-  it("marks loan Defaulted (4), slashes vouchers, and halves borrower reputation", async function () {
+  it("marks loan Defaulted (4), slashes vouchers, leaves reputation unchanged", async function () {
     const ctx = await deployAll();
     await ctx.sbt.issueSBT(ctx.borrower.address);
     await ctx.escrow.connect(ctx.borrower).requestLoan(parseEther("0.05"), 7n);
@@ -328,6 +328,7 @@ describe("LoanEscrow — default & slash", function () {
 
     expect((await ctx.escrow.getLoan(1n)).status).to.equal(4n);
     expect(await ctx.vouchRegistry.getActiveVouchCount(ctx.borrower.address)).to.equal(0n);
-    expect(await ctx.sbt.getReputationScore(ctx.borrower.address)).to.be.lte(scoreBefore / 2n + 1n);
+    // reputation is only updated by ReputationEngine.recalculateScore, not markDefault
+    expect(await ctx.sbt.getReputationScore(ctx.borrower.address)).to.equal(scoreBefore);
   });
 });
