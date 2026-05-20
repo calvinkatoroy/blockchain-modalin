@@ -477,6 +477,14 @@ export function getGuildTierLabel(tier: number): string {
   return GUILD_TIER[tier] ?? "Unknown";
 }
 
+
+export async function selfRegister(): Promise<ethers.ContractTransactionReceipt> {
+  const contract = await getSoulboundToken();
+  const tx = await contract.selfRegister();
+  return tx.wait();
+}
+
+
 // ─────────────────────────────────────────────────────────────
 // WINDOW.ETHEREUM TYPE DECLARATION
 // ─────────────────────────────────────────────────────────────
@@ -486,3 +494,4 @@ declare global {
     ethereum?: any;
   }
 }
+

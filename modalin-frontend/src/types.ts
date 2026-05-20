@@ -4,13 +4,14 @@
  * Status pinjaman dari kontrak LoanEscrow.
  * Kontrak mengembalikan angka (0–3), label ini untuk keperluan UI.
  */
-export type LoanStatus = 'Pending' | 'Active' | 'Repaid' | 'Defaulted';
+export type LoanStatus = 'Requested' | 'Funded' | 'Active' | 'Repaid' | 'Defaulted';
 
 export const LOAN_STATUS_MAP: Record<number, LoanStatus> = {
-  0: 'Pending',
-  1: 'Active',
-  2: 'Repaid',
-  3: 'Defaulted',
+  0: 'Requested',
+  1: 'Funded',
+  2: 'Active',
+  3: 'Repaid',
+  4: 'Defaulted',
 };
 
 /**

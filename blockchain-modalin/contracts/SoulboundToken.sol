@@ -45,26 +45,19 @@ contract SoulboundToken is Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Pendaftaran mandiri saat user pertama kali terhubung lewat frontend.
+     */
+    function selfRegister() external nonReentrant returns (uint256) {
+        if (_profiles[msg.sender].isActive) revert AlreadyHasSBT(msg.sender);
+        return _issueSBT(msg.sender);
+    }
+
+    /**
      * @notice Issues a new SBT to a borrower. Each address can only have one.
      */
     function issueSBT(address to) external onlyAuthorized nonReentrant returns (uint256) {
         if (_profiles[to].isActive) revert AlreadyHasSBT(to);
-
-        uint256 tokenId = _nextTokenId++;
-        _profiles[to] = CreditProfile({
-            tokenId: tokenId,
-            reputationScore: 500, // start at neutral score
-            totalLoansBorrowed: 0,
-            totalLoansRepaid: 0,
-            totalAmountBorrowed: 0,
-            totalAmountRepaid: 0,
-            lastUpdated: block.timestamp,
-            isActive: true
-        });
-        _tokenOwners[tokenId] = to;
-
-        emit SBTIssued(to, tokenId);
-        return tokenId;
+        return _issueSBT(to);
     }
 
     /**
@@ -127,5 +120,23 @@ contract SoulboundToken is Ownable, ReentrancyGuard {
     // Soulbound: all transfer-like operations are permanently disabled
     function transfer(address, uint256) external pure {
         revert TransferNotAllowed();
+    }
+
+    function _issueSBT(address to) internal returns (uint256) {
+        uint256 tokenId = _nextTokenId++;
+        _profiles[to] = CreditProfile({
+            tokenId: tokenId,
+            reputationScore: 500, // start at neutral score
+            totalLoansBorrowed: 0,
+            totalLoansRepaid: 0,
+            totalAmountBorrowed: 0,
+            totalAmountRepaid: 0,
+            lastUpdated: block.timestamp,
+            isActive: true
+        });
+        _tokenOwners[tokenId] = to;
+
+        emit SBTIssued(to, tokenId);
+        return tokenId;
     }
 }
