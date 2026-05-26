@@ -1,136 +1,171 @@
 # ModalIn
 
-Platform pinjaman mikro berbasis reputasi on-chain untuk UMKM Indonesia.  
-Menggunakan Soulbound Token (SBT) sebagai identitas kredit, kelompok kredit (guild) untuk accountability bersama, dan peer vouching sebagai jaminan sosial.
+A decentralized peer-to-peer micro-lending DApp on Ethereum for Indonesian MSMEs.  
+Replaces physical collateral with a triple-layer on-chain reputation system built on Soulbound Tokens, Credit Guilds, and ETH-staked peer vouching.
+
+> Academic project — Computer Engineering Program, Department of Electrical Engineering, Universitas Indonesia.  
+> IEEE conference paper: [`docs/paper/modalin_ieee_paper.pdf`](docs/paper/modalin_ieee_paper.pdf)
 
 ---
 
-## Prasyarat
+## How It Works
 
-Pastikan sudah terinstal:
+Each borrower receives a **Soulbound Token (SBT)** as a non-transferable credit identity (starting score: 500/1000). A composite reputation score drives an algorithmic APR:
+
+| Reputation Signal | Weight |
+| --- | --- |
+| On-chain payment history | 50% |
+| ETH-staked peer vouching | 30% |
+| Off-chain oracle attestation | 20% |
+
+APR formula: `BaseRate (12%) + GroupPremium - ReputationDiscount`, clamped to **6%–36%** (OJK reference bounds).
+
+**Credit Guild tiers** based on collective average score:
+
+| Tier | Score Threshold | APR Premium |
+| --- | --- | --- |
+| Bronze | < 650 | +8% |
+| Silver | >= 650 | +4% |
+| Gold | >= 800 | +0% |
+
+---
+
+## Smart Contracts
+
+| Contract | Role |
+| --- | --- |
+| `SoulboundToken` | Non-transferable credit identity; stores repayment history and score |
+| `GuildSBT` | Credit group management; Bronze/Silver/Gold tier assignment |
+| `VouchRegistry` | ETH-staked peer vouching; slashes stake on borrower default |
+| `ReputationEngine` | Composite score aggregator with time-based decay |
+| `InterestRateModel` | Algorithmic APR calculation from score and guild tier |
+| `LoanEscrow` | Full loan lifecycle: Requested > Active > Repaid/Defaulted |
+
+---
+
+## Prerequisites
 
 - **Node.js** v18+ — [nodejs.org](https://nodejs.org)
-- **npm** v9+ (ikut serta saat install Node.js)
-- **MetaMask** — ekstensi browser untuk interaksi dengan jaringan lokal
+- **npm** v9+
+- **MetaMask** browser extension
 
 ---
 
-## Cara Menjalankan (Mode Lokal)
+## Getting Started (Local)
 
-### 1. Clone repo dan install dependencies
+### 1. Clone and install dependencies
 
 ```bash
 git clone https://github.com/calvinkatoroy/blockchain-modalin.git
 cd blockchain-modalin
 
-# Install dependencies smart contract
-cd blockchain-modalin
+# Smart contract dependencies
+cd contracts
 npm install
 
-# Install dependencies frontend
+# Frontend dependencies
 cd ../modalin-frontend
 npm install
 ```
 
-### 2. Jalankan node Hardhat lokal
-
-Buka terminal baru, lalu dari folder `blockchain-modalin/`:
+### 2. Start a local Hardhat node
 
 ```bash
-cd blockchain-modalin
+# From contracts/
 npm run node
 ```
 
-Ini akan menjalankan blockchain lokal di `http://127.0.0.1:8545` (Chain ID: 31337).  
-Catat beberapa private key akun yang ditampilkan — gunakan untuk MetaMask.
+Starts a local EVM at `http://127.0.0.1:8545` (Chain ID: 31337).  
+Note the private keys printed — import at least 2 into MetaMask.
 
-### 3. Deploy smart contracts
-
-Buka terminal baru (node Hardhat harus tetap berjalan), dari folder `blockchain-modalin/`:
+### 3. Deploy contracts
 
 ```bash
-cd blockchain-modalin
+# From contracts/ (keep the node running in a separate terminal)
 npm run deploy:local
 ```
 
-Script akan men-deploy semua kontrak dan menyalin alamat ke `modalin-frontend/src/abis/contract-addresses.json`.
+Deploys all 6 contracts in dependency order and auto-writes ABIs and addresses to `modalin-frontend/src/abis/`.
 
-### 4. Jalankan frontend
-
-Dari folder `modalin-frontend/`:
+### 4. Start the frontend
 
 ```bash
-cd modalin-frontend
+# From modalin-frontend/
 npm run dev
 ```
 
-Buka browser di `http://localhost:3000`.
+Open `http://localhost:3000`.
 
 ---
 
-## Setup MetaMask
+## Deploying to Sepolia Testnet
 
-1. Tambahkan jaringan baru di MetaMask:
-   - **Nama**: Hardhat Local
-   - **RPC URL**: `http://127.0.0.1:8545`
-   - **Chain ID**: `31337`
-   - **Symbol**: ETH
+Create `contracts/.env` from the example:
 
-2. Import akun dari private key yang ditampilkan saat `npm run node` — gunakan minimal 2 akun (satu peminjam, satu pendana).
+```bash
+cp contracts/.env.example contracts/.env
+# Fill in SEPOLIA_RPC_URL and PRIVATE_KEY
+```
 
----
+Then:
 
-## Alur Demo
-
-### Pinjam & Bayar
-1. Hubungkan dompet (Akun #0 sebagai peminjam) — SBT otomatis dibuat.
-2. Tab **Pinjam** → isi jumlah dan durasi → klik **Ajukan Pinjaman**.
-3. Pindah ke Akun #1 (pendana) → Tab **Danai** → pilih pinjaman → masukkan jumlah → klik **Danai**.
-4. Kembali ke Akun #0 → pinjaman status berubah jadi **Berjalan** → klik **Bayar Sekarang**.
-5. Akun #1 → Tab **Danai** → **Tarik Dana** untuk mengambil pokok + bunga.
-
-### Kelompok Kredit (Guild)
-1. Tab **Reputasi** → bagian **Kelompok Kredit**.
-2. Isi nama kelompok → klik **Buat** (Akun #0 jadi founder).
-3. Di Akun #1: masukkan ID kelompok yang dibuat → klik **Gabung**.
-4. Setelah ada transaksi dan klik **Perbarui Skor**, tier kelompok akan naik sesuai skor kolektif.
-   - Bronze: skor < 650
-   - Silver: skor ≥ 650
-   - Gold: skor ≥ 800
-
-### Vouch
-1. Tab **Reputasi** → bagian **Vouch Aktif**.
-2. Masukkan alamat peminjam yang ingin dijamin dan jumlah ETH (min 0.001).
-3. Klik **Vouch** — ETH di-stake sebagai jaminan sosial.
-4. Skor vouch peminjam akan meningkat dan terlihat di komposit reputasi.
+```bash
+# From contracts/
+npm run deploy:sepolia
+```
 
 ---
 
-## Struktur Folder
+## MetaMask Setup (Local)
+
+Add a custom network in MetaMask:
+
+| Field | Value |
+| --- | --- |
+| Network Name | Hardhat Local |
+| RPC URL | `http://127.0.0.1:8545` |
+| Chain ID | `31337` |
+| Symbol | ETH |
+
+---
+
+## Running Tests
+
+```bash
+# From contracts/
+npm test
+```
+
+29 test scenarios covering all 6 contracts (unit + integration), including default/slash and reentrancy paths. All pass.
+
+---
+
+## Repository Structure
 
 ```
 blockchain-modalin/
-├── blockchain-modalin/      # Hardhat project (smart contracts)
-│   ├── contracts/           # 6 kontrak Solidity
-│   ├── scripts/             # deploy.js, testRunner.js, demo.js
-│   └── test/                # ModalIn.test.js
-└── modalin-frontend/        # React + Vite frontend
-    └── src/
-        ├── App.tsx
-        ├── types.ts
-        └── services/
-            └── contractService.ts
+├── contracts/               # Hardhat project (smart contracts)
+│   ├── contracts/           # 6 Solidity source files
+│   ├── scripts/             # deploy.js, demo.js, testRunner.js
+│   ├── test/                # ModalIn.test.js (29 scenarios)
+│   ├── hardhat.config.js
+│   └── package.json
+├── modalin-frontend/        # React 19 + Vite + TailwindCSS frontend
+│   └── src/
+│       ├── App.tsx
+│       ├── types.ts
+│       └── services/
+│           └── contractService.ts
+└── docs/
+    └── paper/               # IEEE conference paper (LaTeX + PDF)
 ```
 
 ---
 
-## Kontrak yang Di-deploy
+## Team
 
-| Kontrak | Fungsi |
-|---|---|
-| SoulboundToken | Identitas kredit non-transferable (SBT) |
-| GuildSBT | Kelompok kredit dengan tier Bronze/Silver/Gold |
-| VouchRegistry | Peer vouching dengan stake ETH |
-| ReputationEngine | Kalkulasi skor komposit (payment 50% + vouch 30%) |
-| InterestRateModel | APR dinamis berdasarkan reputasi dan tier grup |
-| LoanEscrow | Mekanisme pinjam-meminjam (escrow P2P) |
+| Name | Role |
+| --- | --- |
+| Abednego Zebua | Backend / Smart Contract Engineer |
+| Calvin Wirathama Katoroy | System & Testing Engineer |
+| Wilman Saragih Sitio | Frontend & Web3 Integrator |
