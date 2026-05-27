@@ -448,14 +448,17 @@ export async function markDefault(loanId: bigint): Promise<ethers.ContractTransa
 
 /** Fast-forward waktu Hardhat node (hanya untuk testing lokal) */
 export async function fastForwardTime(seconds: number): Promise<void> {
+  if (!USE_LOCAL) throw new Error("fastForwardTime is only available on local Hardhat network");
   const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
   await provider.send("evm_increaseTime", [seconds]);
   await provider.send("evm_mine", []);
 }
 
-/** Ambil timestamp block terbaru dari Hardhat node */
+/** Ambil timestamp block terbaru */
 export async function getBlockTimestamp(): Promise<number> {
-  const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  const provider = USE_LOCAL
+    ? new ethers.JsonRpcProvider("http://127.0.0.1:8545")
+    : new ethers.JsonRpcProvider(NETWORK.rpcUrl);
   const block = await provider.getBlock("latest");
   return block!.timestamp;
 }
