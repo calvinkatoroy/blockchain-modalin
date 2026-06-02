@@ -58,6 +58,32 @@ import {
 
 type TabKey = 'borrow' | 'lend' | 'reputation';
 
+const IS_LOCAL = import.meta.env.VITE_NETWORK === 'local';
+
+const CONTRACT_ERRORS: Record<string, string> = {
+  AlreadyHasSBT: 'Akun ini sudah memiliki identitas kredit (SBT).',
+  NoSBT: 'Akun belum memiliki identitas kredit. Hubungkan ulang dompet.',
+  NotAuthorized: 'Akun tidak memiliki izin untuk melakukan aksi ini.',
+  TransferNotAllowed: 'Token identitas kredit tidak dapat dipindahtangankan.',
+  InvalidLoanStatus: 'Status pinjaman tidak sesuai untuk aksi ini.',
+  InsufficientRepayment: 'Jumlah pembayaran kurang dari total tagihan.',
+  LoanNotDefaulted: 'Pinjaman belum melewati batas waktu gagal bayar.',
+  AlreadyMember: 'Akun sudah terdaftar di kelompok kredit.',
+  GroupFull: 'Kelompok sudah penuh (maksimal 10 anggota).',
+  SelfVouchNotAllowed: 'Tidak bisa memberikan vouch ke diri sendiri.',
+  user_rejected: 'Transaksi dibatalkan oleh pengguna.',
+  'User denied': 'Transaksi dibatalkan oleh pengguna.',
+};
+
+function friendlyError(err: any): string {
+  const raw: string = err?.reason ?? err?.message ?? String(err);
+  for (const [key, msg] of Object.entries(CONTRACT_ERRORS)) {
+    if (raw.includes(key)) return msg;
+  }
+  if (raw.length > 120) return raw.slice(0, 120) + '…';
+  return raw;
+}
+
 const KNOWN_ACCOUNTS: Record<string, string> = {
   '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266': 'Akun #0 · Peminjam',
   '0x70997970c51812dc3a010c7d01b50e0d17dc79c8': 'Akun #1 · Pendana',
@@ -246,6 +272,15 @@ export default function App() {
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isLoadingLoans, setIsLoadingLoans] = useState(false);
 
+  const setSuccess = useCallback((hash: string) => {
+    setTxState({ status: 'success', hash });
+    setTimeout(() => setTxState((s) => (s.status === 'success' ? { status: 'idle' } : s)), 4000);
+  }, []);
+
+  const setError = useCallback((err: any) => {
+    setTxState({ status: 'error', error: friendlyError(err) });
+  }, []);
+
   const requestedLoans = allLoans.filter((loan) => loan.status === 'Requested');
   const repaidLoansForWithdraw = allLoans.filter(
     (loan) => loan.status === 'Repaid' && loan.borrower.toLowerCase() !== wallet.address.toLowerCase()
@@ -417,7 +452,7 @@ export default function App() {
       await recalculateScore(wallet.address);
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     } finally {
       setIsRecalculating(false);
     }
@@ -430,7 +465,7 @@ export default function App() {
       await loadAllLoans();
       if (wallet.address) await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.message });
+      setError(error);
     } finally {
       setIsForwarding(false);
     }
@@ -448,114 +483,136 @@ export default function App() {
         setIsForwarding(false);
       }
       const receipt = await markDefaultService(BigInt(loan.loanId));
-      setTxState({ status: 'success', hash: receipt.hash });
+      setSuccess(receipt.hash);
       await loadAllLoans();
       if (wallet.address) await loadUserData(wallet.address);
     } catch (error: any) {
       setIsForwarding(false);
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleCreateGroup = async () => {
-    if (!groupName) return;
+    if (!groupName.trim()) return;
     setTxState({ status: 'pending' });
     try {
-      const receipt = await createGroupService(groupName);
-      setTxState({ status: 'success', hash: receipt.hash });
+      const receipt = await createGroupService(groupName.trim());
+      setSuccess(receipt.hash);
       setGroupName('');
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleJoinGroup = async () => {
-    if (!joinGroupId) return;
+    const id = Number(joinGroupId);
+    if (!joinGroupId || isNaN(id) || id < 1) {
+      setTxState({ status: 'error', error: 'Masukkan ID kelompok yang valid (angka positif).' });
+      return;
+    }
     setTxState({ status: 'pending' });
     try {
-      const receipt = await joinGroupService(Number(joinGroupId));
-      setTxState({ status: 'success', hash: receipt.hash });
+      const receipt = await joinGroupService(id);
+      setSuccess(receipt.hash);
       setJoinGroupId('');
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleVouch = async () => {
     if (!vouchAddress || !vouchAmount) return;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(vouchAddress)) {
+      setTxState({ status: 'error', error: 'Format alamat tidak valid. Gunakan format 0x...' });
+      return;
+    }
+    if (vouchAddress.toLowerCase() === wallet.address.toLowerCase()) {
+      setTxState({ status: 'error', error: 'Tidak bisa memberikan vouch ke diri sendiri.' });
+      return;
+    }
+    if (isNaN(Number(vouchAmount)) || Number(vouchAmount) < 0.001) {
+      setTxState({ status: 'error', error: 'Jumlah vouch minimum 0.001 ETH.' });
+      return;
+    }
     setTxState({ status: 'pending' });
     try {
       const voucherScore = profile?.reputationScore ?? 500;
       const receipt = await vouchService(vouchAddress, voucherScore, vouchAmount);
-      setTxState({ status: 'success', hash: receipt.hash });
+      setSuccess(receipt.hash);
       setVouchAddress('');
       setVouchAmount('');
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleRequestLoan = async () => {
-    if (!loanPrincipal || !loanDuration) return;
-
+    const principal = Number(loanPrincipal);
+    const duration = Number(loanDuration);
+    if (!loanPrincipal || isNaN(principal) || principal <= 0) {
+      setTxState({ status: 'error', error: 'Masukkan jumlah pinjaman yang valid (ETH > 0).' });
+      return;
+    }
+    if (!loanDuration || isNaN(duration) || duration < 1 || !Number.isInteger(duration)) {
+      setTxState({ status: 'error', error: 'Durasi pinjaman minimal 1 hari (angka bulat).' });
+      return;
+    }
     setTxState({ status: 'pending' });
     try {
-      const { receipt } = await requestLoanService(loanPrincipal, Number(loanDuration));
-      setTxState({ status: 'success', hash: receipt.hash });
+      const { receipt } = await requestLoanService(loanPrincipal, duration);
+      setSuccess(receipt.hash);
       setLoanPrincipal('');
       setLoanDuration('');
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleRepayLoan = async (loan: Loan) => {
     setTxState({ status: 'pending' });
-
     try {
       const receipt = await repayLoanService(BigInt(loan.loanId), loan.totalDue);
-      setTxState({ status: 'success', hash: receipt.hash });
+      setSuccess(receipt.hash);
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleFundLoan = async (loanId: string) => {
     const amount = fundAmounts[loanId];
-    if (!amount) return;
-
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      setTxState({ status: 'error', error: 'Masukkan jumlah pendanaan yang valid.' });
+      return;
+    }
     setTxState({ status: 'pending' });
     try {
       const receipt = await fundLoanService(BigInt(loanId), amount);
-      setTxState({ status: 'success', hash: receipt.hash });
+      setSuccess(receipt.hash);
       setFundAmounts((prev) => ({ ...prev, [loanId]: '' }));
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
   const handleWithdraw = async (loanId: string) => {
     setTxState({ status: 'pending' });
-
     try {
       const contributions = await getLoanContributions(BigInt(loanId));
       const myIndex = contributions.findIndex(
         (item: any) => item.lender.toLowerCase() === wallet.address.toLowerCase() && !item.withdrawn
       );
-
-      if (myIndex === -1) throw new Error('Tidak ada dana yang bisa ditarik.');
-
+      if (myIndex === -1) throw new Error('Akun ini tidak memiliki kontribusi yang bisa ditarik dari pinjaman ini.');
       const receipt = await withdrawLenderFunds(BigInt(loanId), myIndex);
-      setTxState({ status: 'success', hash: receipt.hash });
+      setSuccess(receipt.hash);
       await loadUserData(wallet.address);
     } catch (error: any) {
-      setTxState({ status: 'error', error: error.reason ?? error.message });
+      setError(error);
     }
   };
 
@@ -1068,17 +1125,19 @@ export default function App() {
                                 Peminjam: {getAccountLabel(loan.borrower)} · Jatuh tempo: {formatDate(loan.dueDate)}
                               </p>
                             </div>
-                            <Button
-                              variant="outline"
-                              onClick={() => handleMarkDefault(loan)}
-                              disabled={txState.status === 'pending' || isForwarding}
-                              className="rounded-full border-red-200 text-red-700 hover:bg-red-50"
-                            >
-                              {txState.status === 'pending' || isForwarding ? (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              ) : null}
-                              Simulasi Gagal Bayar
-                            </Button>
+                            {IS_LOCAL && (
+                              <Button
+                                variant="outline"
+                                onClick={() => handleMarkDefault(loan)}
+                                disabled={txState.status === 'pending' || isForwarding}
+                                className="rounded-full border-red-200 text-red-700 hover:bg-red-50"
+                              >
+                                {txState.status === 'pending' || isForwarding ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : null}
+                                Simulasi Gagal Bayar
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1086,7 +1145,7 @@ export default function App() {
                   )}
                 </SectionCard>
 
-                <SectionCard title="Dev Tools" description="Simulasi percepatan waktu untuk menguji skenario gagal bayar tanpa menunggu.">
+                {IS_LOCAL && <SectionCard title="Dev Tools" description="Simulasi percepatan waktu untuk menguji skenario gagal bayar tanpa menunggu.">
                   <div className="space-y-4">
                     <div>
                       <p className="mb-3 text-sm text-muted-foreground">Majukan waktu blockchain lokal:</p>
@@ -1119,7 +1178,7 @@ export default function App() {
                       <p>5. Vouch terpangkas + reputasi peminjam terpotong 50%</p>
                     </div>
                   </div>
-                </SectionCard>
+                </SectionCard>}
               </div>
             </motion.div>
           )}
@@ -1154,8 +1213,9 @@ export default function App() {
                       </div>
 
                       {[
-                        { label: 'Skor pembayaran (70%)', value: compositeScore.paymentScore },
+                        { label: 'Skor pembayaran (50%)', value: compositeScore.paymentScore },
                         { label: 'Skor vouch (30%)', value: compositeScore.vouchScore },
+                        { label: 'Skor atestasi (20%)', value: compositeScore.attestScore },
                       ].map((item) => (
                         <div key={item.label} className="space-y-2">
                           <div className="flex items-center justify-between text-sm">
@@ -1337,7 +1397,7 @@ export default function App() {
                   description="Penjelasan singkat tentang peran reputasi dalam aplikasi ini."
                 >
                   <div className="space-y-3 text-sm text-muted-foreground">
-                    <p>Reputasi terdiri dari dua komponen: histori pembayaran (70%) dan skor vouch (30%).</p>
+                    <p>Reputasi terdiri dari tiga komponen: histori pembayaran (50%), skor vouch (30%), dan skor atestasi oracle (20%).</p>
                     <p>Bergabung ke kelompok kredit mempengaruhi premium APR: Bronze +8%, Silver +4%, Gold ±0%.</p>
                     <p>Vouch adalah jaminan sosial — anggota kelompok bisa stake ETH untuk mendukung peminjam lain.</p>
                   </div>
