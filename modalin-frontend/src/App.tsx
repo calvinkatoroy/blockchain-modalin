@@ -864,43 +864,53 @@ export default function App() {
                   title="Ajukan Pinjaman"
                   description="Form sederhana untuk membuat permintaan pinjaman baru."
                 >
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-foreground">Jumlah pinjaman (ETH)</label>
-                      <Input
-                        placeholder="Contoh: 0.1"
-                        value={loanPrincipal}
-                        onChange={(event) => setLoanPrincipal(event.target.value)}
-                        className="h-11 rounded-xl"
-                      />
+                  {!wallet.isConnected ? (
+                    <div className="rounded-xl border border-dashed border-border bg-muted/35 px-5 py-8 text-center">
+                      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-muted-foreground shadow-sm">
+                        <Wallet className="h-5 w-5" />
+                      </div>
+                      <p className="font-medium text-foreground">Hubungkan dompet terlebih dahulu</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Klik tombol <strong>Hubungkan Dompet</strong> di pojok kanan atas untuk mulai.</p>
+                      <Button onClick={handleConnectWallet} className="mt-4 rounded-full px-6">
+                        <Wallet className="mr-2 h-4 w-4" />
+                        Hubungkan Dompet
+                      </Button>
                     </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-foreground">Jumlah pinjaman (ETH)</label>
+                        <Input
+                          placeholder="Contoh: 0.1"
+                          value={loanPrincipal}
+                          onChange={(event) => setLoanPrincipal(event.target.value)}
+                          className="h-11 rounded-xl"
+                        />
+                      </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-foreground">Durasi (hari)</label>
-                      <Input
-                        type="number"
-                        placeholder="Contoh: 30"
-                        value={loanDuration}
-                        onChange={(event) => setLoanDuration(event.target.value)}
-                        className="h-11 rounded-xl"
-                      />
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-foreground">Durasi (hari)</label>
+                        <Input
+                          type="number"
+                          placeholder="Contoh: 30"
+                          value={loanDuration}
+                          onChange={(event) => setLoanDuration(event.target.value)}
+                          className="h-11 rounded-xl"
+                        />
+                      </div>
+
+                      <Button
+                        onClick={handleRequestLoan}
+                        disabled={!loanPrincipal || !loanDuration || txState.status === 'pending'}
+                        className="h-11 w-full rounded-xl"
+                      >
+                        {txState.status === 'pending' ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : null}
+                        Ajukan Pinjaman
+                      </Button>
                     </div>
-
-                    <Button
-                      onClick={handleRequestLoan}
-                      disabled={!wallet.isConnected || !loanPrincipal || !loanDuration || txState.status === 'pending'}
-                      className="h-11 w-full rounded-xl"
-                    >
-                      {txState.status === 'pending' ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : null}
-                      Ajukan Pinjaman
-                    </Button>
-
-                    {!wallet.isConnected ? (
-                      <p className="text-sm text-muted-foreground">Hubungkan dompet terlebih dahulu.</p>
-                    ) : null}
-                  </div>
+                  )}
                 </SectionCard>
 
                 <SectionCard
@@ -962,7 +972,7 @@ export default function App() {
               <div className="space-y-6">
                 <SectionCard
                   title="Ringkasan Pasar"
-                  description="Gambaran cepat kondisi pinjaman pada jaringan lokal."
+                  description={`Gambaran cepat kondisi pinjaman pada ${IS_LOCAL ? 'jaringan lokal' : 'Ethereum Sepolia Testnet'}.`}
                 >
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-border p-4">
