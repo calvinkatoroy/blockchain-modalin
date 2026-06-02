@@ -616,6 +616,114 @@ export default function App() {
     }
   };
 
+  // ── Landing page (wallet not connected) ────────────────────────
+  if (!wallet.isConnected) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex flex-col">
+        <header className="border-b border-border bg-white/90 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-primary">ModalIn</h1>
+              <p className="text-xs text-muted-foreground">Platform pinjaman mikro berbasis reputasi on-chain.</p>
+            </div>
+            <Button onClick={handleConnectWallet} className="rounded-full px-5">
+              <Wallet className="mr-2 h-4 w-4" />
+              Hubungkan Dompet
+            </Button>
+          </div>
+        </header>
+
+        <AnimatePresence>
+          {txState.status === 'error' && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 16 }}
+              className="fixed bottom-5 right-5 z-50 max-w-sm rounded-2xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg text-red-800"
+            >
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 h-4 w-4" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Gagal menghubungkan dompet</p>
+                  <p className="mt-1 text-xs">{txState.error}</p>
+                  <button onClick={() => setTxState({ status: 'idle' })} className="mt-2 text-xs underline underline-offset-2">Tutup</button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <main className="flex flex-1 flex-col items-center justify-center px-4 py-16 sm:px-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="w-full max-w-2xl text-center"
+          >
+            <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
+              <Shield className="h-8 w-8 text-primary" />
+            </div>
+            <h2 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+              Pinjaman mikro berbasis<br />reputasi on-chain
+            </h2>
+            <p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
+              ModalIn menggantikan agunan fisik dengan identitas kredit digital.
+              Skor reputasi kamu menentukan bunga pinjaman — bukan bank, bukan manajer kredit.
+            </p>
+
+            <div className="mt-10 grid gap-4 text-left sm:grid-cols-3">
+              {[
+                {
+                  icon: <Shield className="h-5 w-5 text-primary" />,
+                  title: 'Identitas Kredit (SBT)',
+                  desc: 'Token non-transferable yang merekam histori pembayaranmu secara permanen on-chain.',
+                },
+                {
+                  icon: <CheckCircle2 className="h-5 w-5 text-primary" />,
+                  title: 'Vouch & Kelompok',
+                  desc: 'Teman bisa stake ETH sebagai jaminan sosial. Bergabung ke kelompok kredit untuk bunga lebih rendah.',
+                },
+                {
+                  icon: <ArrowUpRight className="h-5 w-5 text-primary" />,
+                  title: 'Bunga Algoritmik',
+                  desc: 'APR 6%–36% dihitung otomatis dari skormu. Makin tinggi reputasi, makin rendah bunga.',
+                },
+              ].map((f) => (
+                <div key={f.title} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+                  <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+                    {f.icon}
+                  </div>
+                  <p className="font-medium text-foreground">{f.title}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{f.desc}</p>
+                </div>
+              ))}
+            </div>
+
+            <Button
+              onClick={handleConnectWallet}
+              size="lg"
+              className="mt-10 rounded-full px-10 py-6 text-base"
+            >
+              <Wallet className="mr-2 h-5 w-5" />
+              Hubungkan Dompet MetaMask
+            </Button>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Identitas kredit (SBT) akan dibuat otomatis saat pertama kali terhubung.
+            </p>
+          </motion.div>
+        </main>
+
+        <footer className="border-t border-border bg-white">
+          <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-4 text-xs text-muted-foreground sm:px-6 sm:flex-row sm:items-center sm:justify-between">
+            <p>ModalIn — Simulasi pinjaman mikro berbasis blockchain.</p>
+            <p>{IS_LOCAL ? 'Hardhat Local • Chain ID 31337' : 'Ethereum Sepolia Testnet • Chain ID 11155111'}</p>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+  // ── End landing page ─────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border bg-white/90 backdrop-blur">
@@ -623,9 +731,6 @@ export default function App() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-semibold tracking-tight text-primary">ModalIn</h1>
-              {/* <Badge variant="outline" className="rounded-full px-2.5 py-0.5 text-[11px]">
-                Demo
-              </Badge> */}
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               Platform pinjaman mikro berbasis reputasi on-chain.
@@ -650,21 +755,14 @@ export default function App() {
               ))}
             </div>
 
-            {wallet.isConnected ? (
-              <div className="rounded-2xl border border-border bg-muted/40 px-4 py-2.5">
-                <p className="text-xs font-medium text-foreground">{getAccountLabel(wallet.address)}</p>
-                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{shortAddress(wallet.address)}</span>
-                  <span>•</span>
-                  <span>{eth(wallet.balance)}</span>
-                </div>
+            <div className="rounded-2xl border border-border bg-muted/40 px-4 py-2.5">
+              <p className="text-xs font-medium text-foreground">{getAccountLabel(wallet.address)}</p>
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <span>{shortAddress(wallet.address)}</span>
+                <span>•</span>
+                <span>{eth(wallet.balance)}</span>
               </div>
-            ) : (
-              <Button onClick={handleConnectWallet} className="rounded-full px-5">
-                <Wallet className="mr-2 h-4 w-4" />
-                Hubungkan Dompet
-              </Button>
-            )}
+            </div>
           </div>
         </div>
       </header>
@@ -864,53 +962,39 @@ export default function App() {
                   title="Ajukan Pinjaman"
                   description="Form sederhana untuk membuat permintaan pinjaman baru."
                 >
-                  {!wallet.isConnected ? (
-                    <div className="rounded-xl border border-dashed border-border bg-muted/35 px-5 py-8 text-center">
-                      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-muted-foreground shadow-sm">
-                        <Wallet className="h-5 w-5" />
-                      </div>
-                      <p className="font-medium text-foreground">Hubungkan dompet terlebih dahulu</p>
-                      <p className="mt-1 text-sm text-muted-foreground">Klik tombol <strong>Hubungkan Dompet</strong> di pojok kanan atas untuk mulai.</p>
-                      <Button onClick={handleConnectWallet} className="mt-4 rounded-full px-6">
-                        <Wallet className="mr-2 h-4 w-4" />
-                        Hubungkan Dompet
-                      </Button>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-foreground">Jumlah pinjaman (ETH)</label>
+                      <Input
+                        placeholder="Contoh: 0.1"
+                        value={loanPrincipal}
+                        onChange={(event) => setLoanPrincipal(event.target.value)}
+                        className="h-11 rounded-xl"
+                      />
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium text-foreground">Jumlah pinjaman (ETH)</label>
-                        <Input
-                          placeholder="Contoh: 0.1"
-                          value={loanPrincipal}
-                          onChange={(event) => setLoanPrincipal(event.target.value)}
-                          className="h-11 rounded-xl"
-                        />
-                      </div>
 
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium text-foreground">Durasi (hari)</label>
-                        <Input
-                          type="number"
-                          placeholder="Contoh: 30"
-                          value={loanDuration}
-                          onChange={(event) => setLoanDuration(event.target.value)}
-                          className="h-11 rounded-xl"
-                        />
-                      </div>
-
-                      <Button
-                        onClick={handleRequestLoan}
-                        disabled={!loanPrincipal || !loanDuration || txState.status === 'pending'}
-                        className="h-11 w-full rounded-xl"
-                      >
-                        {txState.status === 'pending' ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : null}
-                        Ajukan Pinjaman
-                      </Button>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-foreground">Durasi (hari)</label>
+                      <Input
+                        type="number"
+                        placeholder="Contoh: 30"
+                        value={loanDuration}
+                        onChange={(event) => setLoanDuration(event.target.value)}
+                        className="h-11 rounded-xl"
+                      />
                     </div>
-                  )}
+
+                    <Button
+                      onClick={handleRequestLoan}
+                      disabled={!loanPrincipal || !loanDuration || txState.status === 'pending'}
+                      className="h-11 w-full rounded-xl"
+                    >
+                      {txState.status === 'pending' ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Ajukan Pinjaman
+                    </Button>
+                  </div>
                 </SectionCard>
 
                 <SectionCard
